@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-NIDS Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6l8-3z"/></svg>
+      <span>AI-NIDS</span>
+    </div>
+    <nav>
+      <button class="nav-item active" data-view="dashboard">Dashboard</button>
+      <button class="nav-item" data-view="alerts">Alerts</button>
+      <button class="nav-item" data-view="model">Model</button>
+      <button class="nav-item" data-view="limitations">Limitations</button>
+    </nav>
+    <div class="side-status">
+      <span class="dot"></span>
+      <div><strong>Model loaded</strong><small id="side-model-info">checking...</small></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <input id="search" type="search" placeholder="Search alerts by attack type or port...">
+      <div class="top-actions">
+        <a id="dl-alerts" class="btn btn-ghost disabled" href="#">Download alerts</a>
+        <a id="dl-all" class="btn btn-ghost disabled" href="#">Download all results</a>
+        <button id="upload-btn" class="btn btn-primary">Upload CSV</button>
+        <input id="file-input" type="file" accept=".csv" hidden>
+      </div>
+    </header>
+
+    <div id="banner" class="banner hidden"></div>
+
+    <main>
+      <!-- ================= DASHBOARD ================= -->
+      <section id="view-dashboard" class="view">
+        <h1>Network Intrusion Detection</h1>
+        <p class="muted" id="file-info">No file analysed yet.</p>
+
+        <div id="empty-state" class="card dropzone">
+          <h2>Upload a CSV of network flows</h2>
+          <p class="muted">Drag a file anywhere on this page, or choose one. The file needs the 69 CICFlowMeter-style feature columns (extra columns and column order do not matter).</p>
+          <button class="btn btn-primary" id="upload-btn-2">Choose a file</button>
+        </div>
+
+        <div id="results" class="hidden">
+          <div class="kpis">
+            <div class="card kpi"><span class="kpi-label">Flows uploaded</span><span class="kpi-value" id="kpi-uploaded">-</span><span class="kpi-note">rows in the file</span></div>
+            <div class="card kpi"><span class="kpi-label">Flows scored</span><span class="kpi-value" id="kpi-scored">-</span><span class="kpi-note">judged by the model</span></div>
+            <div class="card kpi"><span class="kpi-label">Alerts</span><span class="kpi-value red" id="kpi-alerts">-</span><span class="kpi-note" id="kpi-alerts-note"></span></div>
+            <div class="card kpi"><span class="kpi-label">Not scored</span><span class="kpi-value amber" id="kpi-notscored">-</span><span class="kpi-note">missing, infinite or invalid values</span></div>
+            <div class="card kpi"><span class="kpi-label">Processing time</span><span class="kpi-value" id="kpi-time">-</span><span class="kpi-note">upload to result</span></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <h2>Traffic overview</h2>
+              <p class="muted small">Flows per position in the file. Row order approximates capture order; the file has no clock times.</p>
+              <div class="chart-box"><canvas id="timeline-chart"></canvas></div>
+            </div>
+            <div class="card">
+              <h2>Alert types</h2>
+              <div class="donut-wrap">
+                <div class="chart-box donut">
+                  <canvas id="donut-chart"></canvas>
+                  <div class="donut-center"><strong id="donut-total">0</strong><span>alerts</span></div>
+                </div>
+                <ul id="legend" class="legend"></ul>
+              </div>
+              <p class="muted small">The badge shows how reliable that alert type was in testing (precision: High 0.95 or more, Medium 0.85 to 0.95, Low below 0.85). It is a model-based label, not a severity rating.</p>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>Top alerts</h2><button class="btn btn-ghost small-btn" id="view-all">View all</button></div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Row</th><th>Type</th><th>Reliability</th><th>Confidence</th><th>Dest. port</th></tr></thead>
+                  <tbody id="top-alerts"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card">
+              <h2>Model status</h2>
+              <div class="meter"><div class="meter-head"><span>Macro-F1, blocked CV (mean)</span><strong id="ms-f1">-</strong></div><div class="bar"><div class="bar-fill blue" id="ms-f1-bar"></div></div></div>
+              <div class="meter"><div class="meter-head"><span>Macro-F1, worst fold</span><strong id="ms-worst">-</strong></div><div class="bar"><div class="bar-fill amber" id="ms-worst-bar"></div></div></div>
+              <div class="meter"><div class="meter-head"><span>False-alarm rate (mean / worst fold)</span><strong id="ms-fa">-</strong></div></div>
+              <p class="muted small" id="ms-caveat"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= ALERTS ================= -->
+      <section id="view-alerts" class="view hidden">
+        <h1>Alerts</h1>
+        <p class="muted" id="alerts-empty">Upload a file to see alerts.</p>
+        <div id="alerts-panel" class="hidden">
+          <div class="card filters">
+            <div id="class-chips" class="chips"></div>
+            <label class="slider">Minimum confidence (display filter)
+              <input id="min-conf" type="range" min="0" max="1" step="0.05" value="0">
+              <span id="min-conf-val">0.00</span>
+            </label>
+          </div>
+          <div class="card">
+            <p id="alerts-count" class="muted"></p>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Row</th><th>Type</th><th>Reliability</th><th>Confidence</th><th>Attack score</th><th>Dest. port</th><th>Fwd packets</th><th>Bwd packets</th><th>Duration (µs)</th></tr></thead>
+                <tbody id="alerts-body"></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <button class="btn btn-ghost" id="prev">Previous</button>
+              <span id="page-info"></span>
+              <button class="btn btn-ghost" id="next">Next</button>
+            </div>
+            <p class="muted small">Confidence is the share of trees voting for the predicted type. Attack score is 1 minus the share voting BENIGN. Both are scores, not calibrated probabilities.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= MODEL ================= -->
+      <section id="view-model" class="view hidden">
+        <h1>Model</h1>
+        <div class="card">
+          <h2>About the model</h2>
+          <ul class="facts">
+            <li>Algorithm: Random Forest (100 trees, minimum leaf size 5, square-root class weights)</li>
+            <li>Trained on: CICIDS2017, 11 classes (trained <span id="mv-trained"></span>)</li>
+            <li>Input: <span id="mv-features"></span> flow features per row</li>
+          </ul>
+          <p class="muted small" id="mv-caveat"></p>
+        </div>
+        <div class="card">
+          <h2>How reliable is each class?</h2>
+          <p class="muted small">Measured in blocked cross-validation on CICIDS2017.</p>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>Recall, worst fold</th><th>Reliability</th></tr></thead>
+              <tbody id="mv-table"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Confusion matrix (blocked cross-validation)</h2>
+          <img class="matrix" src="{{ url_for('static', filename='report_confusion_normalized.png') }}" alt="Confusion matrix from blocked cross-validation">
+        </div>
+      </section>
+
+      <!-- ================= LIMITATIONS ================= -->
+      <section id="view-limitations" class="view hidden">
+        <h1>Limitations</h1>
+        <div class="card">
+          <ul class="facts">
+            <li><strong>One training dataset.</strong> The model learned from CICIDS2017 only (one test network, one week, 10 attack types plus normal traffic). It has never seen other networks, newer attacks, or Heartbleed and Infiltration.</li>
+            <li><strong>Inputs must match the training features.</strong> The file needs the 69 flow features produced by a CICFlowMeter-style extractor. Raw packet captures cannot be scored directly.</li>
+            <li><strong>Estimated performance is optimistic.</strong> In blocked cross-validation the macro-F1 was about 0.95 (worst fold about 0.90). The settings were chosen on those same folds, and the test was never run on a different network.</li>
+            <li><strong>False alarms.</strong> About 0.2% of normal flows were flagged in testing (0.36% in the worst fold). On a busy network that still means many false alerts per day.</li>
+            <li><strong>Alert types differ in reliability.</strong> Roughly 3 in 8 Bot alerts were wrong in testing, and the slow DoS types (slowloris, Slowhttptest) were missed about 15% of the time.</li>
+            <li><strong>"Not scored" does not mean safe.</strong> Rows with missing, infinite or invalid values are listed but were not judged.</li>
+            <li><strong>Scores are not probabilities.</strong> Confidence is the share of trees voting for the predicted type.</li>
+            <li><strong>Detection only.</strong> The system reports suspicious flows. It does not block anything, and results are model estimates, not proof of malicious activity.</li>
+            <li><strong>Prototype.</strong> This is a coursework project and not a production security tool.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='chart.umd.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
